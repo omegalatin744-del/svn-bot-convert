@@ -10,7 +10,6 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 SCRIPT_VIDEO = "image_to_svn.py"
 SCRIPT_PHOTO = "image_to_svn_photo.py"
-SCRIPT_ASCII = "image_to_ascii.py"
 
 ADMIN_ID = 6667068532
 LOG_CHAT_ID = -1003919249553
@@ -102,11 +101,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("Создать видео-карту", callback_data="start_video")],
         [InlineKeyboardButton("Создать фото-карту", callback_data="start_photo")],
-        [InlineKeyboardButton("ASCII конвертор", callback_data="start_ascii")],
         [InlineKeyboardButton("Дополнительно", callback_data="more_menu")],
     ]
     await update.message.reply_text(
-        "Выбери действие, затем отправь файл.",
+        "Выбери тип карты, затем отправь GIF или видео.",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
@@ -161,19 +159,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if query.data == "start_video":
-        await query.edit_message_text("Отправь GIF или видео для видео-карты.")
+        await query.edit_message_text("Отлично! Отправь GIF или видео для видео-карты.")
         context.user_data["waiting"] = True
         context.user_data["mode"] = "video"
 
     elif query.data == "start_photo":
-        await query.edit_message_text("Отправь GIF, PNG или JPG для фото-карты.")
+        await query.edit_message_text("Отлично! Отправь GIF, PNG или JPG для фото-карты.")
         context.user_data["waiting"] = True
         context.user_data["mode"] = "photo"
-
-    elif query.data == "start_ascii":
-        await query.edit_message_text("Отправь GIF, PNG или JPG для ASCII-конвертации.")
-        context.user_data["waiting"] = True
-        context.user_data["mode"] = "ascii"
 
     elif query.data == "more_menu":
         keyboard = [
@@ -191,7 +184,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [
             [InlineKeyboardButton("Создать видео-карту", callback_data="start_video")],
             [InlineKeyboardButton("Создать фото-карту", callback_data="start_photo")],
-            [InlineKeyboardButton("ASCII конвертор", callback_data="start_ascii")],
             [InlineKeyboardButton("Дополнительно", callback_data="more_menu")],
         ]
         await query.edit_message_text("Главное меню:", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -215,25 +207,21 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     mode = context.user_data.get("mode", "video")
 
-    # Лимит проверяем только для карт (video / photo), ASCII — без лимита
-    if mode in ("video", "photo"):
-        can_use, remaining = check_limit(uid)
-        if not can_use:
-            await update.message.reply_text(
-                "Лимит исчерпан.\n"
-                "Вы использовали 3 сохранения за последние 24 часа.\n"
-                "Попробуйте позже."
-            )
-            await send_log(
-                context,
-                f"Лимит исчерпан\n"
-                f"@{username} (ID: {uid})\n"
-                f"Имя: {full_name}\n"
-                f"Попытка отправить файл сверх лимита"
-            )
-            return
-    else:
-        remaining = None
+    can_use, remaining = check_limit(uid)
+    if not can_use:
+        await update.message.reply_text(
+            "Лимит исчерпан.\n"
+            "Вы использовали 3 сохранения за последние 24 часа.\n"
+            "Попробуйте позже."
+        )
+        await send_log(
+            context,
+            f"Лимит исчерпан\n"
+            f"@{username} (ID: {uid})\n"
+            f"Имя: {full_name}\n"
+            f"Попытка отправить файл сверх лимита"
+        )
+        return
 
     message = update.message
     file_obj = None
@@ -257,18 +245,12 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         file_size = message.document.file_size
         file_id = message.document.file_id
     else:
-        await message.reply_text("Пожалуйста, отправь GIF, видео или изображение.")
+        await message.reply_text("Пожалуйста, отправь GIF, видео или файл-гифку.")
         return
 
     size_kb = file_size // 1024 if file_size else 0
     now = kyiv_now().strftime("%d.%m.%Y %H:%M:%S")
-
-    if mode == "video":
-        mode_label = "ВИДЕО"
-    elif mode == "photo":
-        mode_label = "ФОТО"
-    else:
-        mode_label = "ASCII"
+    mode_label = "ФОТО" if mode == "photo" else "ВИДЕО"
 
     log_event(f"MEDIA ({mode_label}): {uid} @{username} '{original_name}' {size_kb} KB")
 
@@ -282,18 +264,16 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         log_event(f"Не удалось переслать файл в группу: {e}")
 
-    log_lines = [
-        f"Новый файл ({mode_label})",
-        f"@{username} (ID: {uid})",
-        f"Имя: {full_name}",
-        f"Файл: {original_name}",
-        f"Размер: {size_kb} KB",
-    ]
-    if remaining is not None:
-        log_lines.append(f"Осталось попыток: {remaining - 1}")
-    log_lines.append(now)
-
-    await send_log(context, "\n".join(log_lines))
+    await send_log(
+        context,
+        f"Новый файл ({mode_label})\n"
+        f"@{username} (ID: {uid})\n"
+        f"Имя: {full_name}\n"
+        f"Файл: {original_name}\n"
+        f"Размер: {size_kb} KB\n"
+        f"Осталось попыток: {remaining - 1}\n"
+        f"{now}"
+    )
 
     os.makedirs("./tmp", exist_ok=True)
     input_path = f"./tmp/{original_name}"
@@ -313,42 +293,6 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await send_log(context, f"Ошибка ffmpeg у {uid}: {e.stderr.decode()[:100]}")
             return
 
-    # ── ASCII-режим ───────────────────────────────────────────────────────────
-    if mode == "ascii":
-        txt_path = f"./tmp/{os.path.splitext(os.path.basename(input_path))[0]}.ascii.txt"
-        try:
-            result = subprocess.run(
-                ["python", SCRIPT_ASCII, input_path, txt_path],
-                capture_output=True, text=True, check=True
-            )
-            with open(txt_path, "r", encoding="utf-8") as f:
-                ascii_str = f.read().strip()
-
-            await message.reply_text(ascii_str)
-            log_event(f"ASCII SUCCESS: {uid} @{username}")
-            await send_log(
-                context,
-                f"ASCII готов\n"
-                f"@{username} (ID: {uid})\n"
-                f"{kyiv_now().strftime('%d.%m.%Y %H:%M:%S')}"
-            )
-            context.user_data["waiting"] = False
-        except subprocess.CalledProcessError as e:
-            await message.reply_text(f"Ошибка ASCII: {e.stderr[:300]}")
-            await send_log(context, f"Ошибка ASCII у {uid}: {e.stderr[:150]}")
-        except Exception as e:
-            await message.reply_text(f"Ошибка: {str(e)[:300]}")
-            await send_log(context, f"Ошибка у {uid}: {str(e)[:150]}")
-        finally:
-            for p in [input_path, txt_path]:
-                if os.path.exists(p):
-                    try:
-                        os.remove(p)
-                    except:
-                        pass
-        return
-
-    # ── Режимы видео и фото ───────────────────────────────────────────────────
     output_path = f"./tmp/{os.path.splitext(os.path.basename(input_path))[0]}.svn"
 
     if mode == "photo":
@@ -366,24 +310,19 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         new_name = f"{prefix}{random.randint(100000, 999999)}.svn"
         await message.reply_document(document=open(output_path, "rb"), filename=new_name)
 
-        if mode in ("video", "photo"):
-            add_usage(uid)
-            _, remaining_after = check_limit(uid)
-        else:
-            remaining_after = None
+        add_usage(uid)
+        _, remaining_after = check_limit(uid)
 
         log_event(f"SUCCESS ({mode_label}): {uid} @{username} -> {new_name}")
 
-        log_lines = [
-            f"Сконвертировано ({mode_label})",
-            f"@{username} (ID: {uid})",
-            f"Отдано: {new_name}",
-        ]
-        if remaining_after is not None:
-            log_lines.append(f"Осталось попыток: {remaining_after}")
-        log_lines.append(kyiv_now().strftime("%d.%m.%Y %H:%M:%S"))
-
-        await send_log(context, "\n".join(log_lines))
+        await send_log(
+            context,
+            f"Сконвертировано ({mode_label})\n"
+            f"@{username} (ID: {uid})\n"
+            f"Отдано: {new_name}\n"
+            f"Осталось попыток: {remaining_after}\n"
+            f"{kyiv_now().strftime('%d.%m.%Y %H:%M:%S')}"
+        )
         context.user_data["waiting"] = False
     except subprocess.CalledProcessError as e:
         await message.reply_text(f"Ошибка конвертации: {e.stderr[:300]}")
