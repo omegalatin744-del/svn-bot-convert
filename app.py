@@ -158,7 +158,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Имя: {full_name}\n"
         f"Файл: {original_name}\n"
         f"Размер: {size_kb} KB\n"
-        f"{now} Kyiv"
+        f"{now} "
     )
 
     os.makedirs("./tmp", exist_ok=True)
