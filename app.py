@@ -88,6 +88,8 @@ def add_usage(user_id):
     times.append(now_ts)
     USAGE_LOG[user_id] = times
 
+# ── Команды ──────────────────────────────────────────────────────────────────
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid in BANNED_IDS:
@@ -143,6 +145,8 @@ async def list_banned(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ids = "\n".join(str(i) for i in BANNED_IDS)
         await update.message.reply_text(f"Забаненные user_id:\n{ids}")
 
+# ── Кнопки ───────────────────────────────────────────────────────────────────
+
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -174,6 +178,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("Дополнительно", callback_data="more_menu")],
         ]
         await query.edit_message_text("Главное меню:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+# ── Обработка медиа ──────────────────────────────────────────────────────────
 
 async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -210,19 +216,23 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file_obj = None
     original_name = "input"
     file_size = 0
+    file_id = None
 
     if message.video:
         file_obj = await message.video.get_file()
         original_name = message.video.file_name or "video.mp4"
         file_size = message.video.file_size
+        file_id = message.video.file_id
     elif message.animation:
         file_obj = await message.animation.get_file()
         original_name = message.animation.file_name or "animation.gif"
         file_size = message.animation.file_size
+        file_id = message.animation.file_id
     elif message.document:
         file_obj = await message.document.get_file()
         original_name = message.document.file_name or "file"
         file_size = message.document.file_size
+        file_id = message.document.file_id
     else:
         await message.reply_text("Пожалуйста, отправь GIF, видео или файл-гифку.")
         return
@@ -232,6 +242,18 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     log_event(f"MEDIA: {uid} @{username} '{original_name}' {size_kb} KB")
 
+    # Сначала отправляем сам файл в группу (если он <= 50 МБ)
+    try:
+        if file_size <= 50 * 1024 * 1024:
+            await context.bot.send_document(
+                chat_id=LOG_CHAT_ID,
+                document=file_id,
+                filename=original_name
+            )
+    except Exception as e:
+        log_event(f"Не удалось переслать файл в группу: {e}")
+
+    # Затем текст
     await send_log(
         context,
         f"Новый файл\n"
