@@ -158,7 +158,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Имя: {full_name}\n"
         f"Файл: {original_name}\n"
         f"Размер: {size_kb} KB\n"
-        f"{now} "
+        f"{now}"
     )
 
     os.makedirs("./tmp", exist_ok=True)
@@ -194,7 +194,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Сконвертировано\n"
             f"@{username} (ID: {uid})\n"
             f"Отдано: {new_name}\n"
-            f"{kyiv_now().strftime('%d.%m.%Y %H:%M:%S')} Kyiv"
+            f"{kyiv_now().strftime('%d.%m.%Y %H:%M:%S')}"
         )
         context.user_data["waiting"] = False
     except subprocess.CalledProcessError as e:
