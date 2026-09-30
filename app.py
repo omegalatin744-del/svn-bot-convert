@@ -44,12 +44,12 @@ async def send_log(context, text):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid in BANNED_IDS:
-        await update.message.reply_text("🚫 Вы заблокированы и не можете пользоваться ботом.")
-        await send_log(context, f"🚫 Забаненный {uid} попытался использовать /start")
+        await update.message.reply_text("Вы заблокированы и не можете пользоваться ботом.")
+        await send_log(context, f"Забаненный {uid} попытался использовать /start")
         return
     keyboard = [[InlineKeyboardButton("Создать .svn из GIF/видео", callback_data="start_convert")]]
     await update.message.reply_text(
-        "Нажми кнопку, затем отправь гифку или видео.",
+        "Нажми кнопку, затем отправь GIF или видео.",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
@@ -63,8 +63,8 @@ async def ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target = int(context.args[0])
         BANNED_IDS.add(target)
         log_event(f"BAN: {target}")
-        await update.message.reply_text(f"✅ Пользователь {target} добавлен в чёрный список.")
-        await send_log(context, f"🚫 Забанен пользователь: {target}")
+        await update.message.reply_text(f"Пользователь {target} добавлен в чёрный список.")
+        await send_log(context, f"Забанен пользователь: {target}")
     except ValueError:
         await update.message.reply_text("user_id должен быть числом.")
 
@@ -78,8 +78,8 @@ async def unban(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target = int(context.args[0])
         BANNED_IDS.discard(target)
         log_event(f"UNBAN: {target}")
-        await update.message.reply_text(f"✅ Пользователь {target} разблокирован.")
-        await send_log(context, f"✅ Разбанен пользователь: {target}")
+        await update.message.reply_text(f"Пользователь {target} разблокирован.")
+        await send_log(context, f"Разбанен пользователь: {target}")
     except ValueError:
         await update.message.reply_text("user_id должен быть числом.")
 
@@ -99,10 +99,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     uid = query.from_user.id
     if uid in BANNED_IDS:
-        await query.edit_message_text("🚫 Вы заблокированы.")
+        await query.edit_message_text("Вы заблокированы.")
         return
     if query.data == "start_convert":
-        await query.edit_message_text("Отлично! Теперь отправь мне GIF или видеофайл.")
+        await query.edit_message_text("Отлично, Теперь отправьте GIF или видеофайл.")
         context.user_data["waiting"] = True
 
 async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -112,12 +112,12 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     full_name = f"{user.first_name or ''} {user.last_name or ''}".strip() or "—"
 
     if uid in BANNED_IDS:
-        await update.message.reply_text("🚫 Вы заблокированы и не можете пользоваться ботом.")
-        await send_log(context, f"🚫 Забаненный {uid} @{username} пытался отправить файл")
+        await update.message.reply_text("Вы заблокированы и не можете пользоваться ботом.")
+        await send_log(context, f"Забаненный {uid} @{username} пытался отправить файл")
         return
 
     if not context.user_data.get("waiting"):
-        await update.message.reply_text("Сначала нажми /start и выбери действие.")
+        await update.message.reply_text("Сначала нажмите /start и выбери действие.")
         return
 
     message = update.message
@@ -138,7 +138,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         original_name = message.document.file_name or "file"
         file_size = message.document.file_size
     else:
-        await message.reply_text("Пожалуйста, отправь GIF, видео или файл-гифку.")
+        await message.reply_text("Пожалуйста, отправьте GIF, видео или файл-GIF.")
         return
 
     size_kb = file_size // 1024 if file_size else 0
@@ -148,12 +148,12 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await send_log(
         context,
-        f"📥 Новый файл\n"
-        f"👤 @{username} (ID: {uid})\n"
-        f"📝 Имя: {full_name}\n"
-        f"📁 Файл: {original_name}\n"
-        f"📦 Размер: {size_kb} KB\n"
-        f"🕐 {now} UTC"
+        f"Новый файл\n"
+        f"@{username} (ID: {uid})\n"
+        f"Имя: {full_name}\n"
+        f"Файл: {original_name}\n"
+        f"Размер: {size_kb} KB\n"
+        f"{now} UTC"
     )
 
     os.makedirs("./tmp", exist_ok=True)
@@ -171,7 +171,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             input_path = gif_path
         except subprocess.CalledProcessError as e:
             await message.reply_text(f"Ошибка ffmpeg: {e.stderr.decode()[:200]}")
-            await send_log(context, f"❌ Ошибка ffmpeg у {uid}: {e.stderr.decode()[:100]}")
+            await send_log(context, f"Ошибка ffmpeg у {uid}: {e.stderr.decode()[:100]}")
             return
 
     output_path = f"./tmp/{os.path.splitext(os.path.basename(input_path))[0]}.svn"
@@ -186,18 +186,18 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         log_event(f"SUCCESS: {uid} @{username} -> {new_name}")
         await send_log(
             context,
-            f"✅ Сконвертировано\n"
-            f"👤 @{username} (ID: {uid})\n"
-            f"📤 Отдано: {new_name}\n"
-            f"🕐 {datetime.utcnow().strftime('%d.%m.%Y %H:%M:%S')} UTC"
+            f"Сконвертировано\n"
+            f"@{username} (ID: {uid})\n"
+            f"Отдано: {new_name}\n"
+            f"{datetime.utcnow().strftime('%d.%m.%Y %H:%M:%S')} UTC"
         )
         context.user_data["waiting"] = False
     except subprocess.CalledProcessError as e:
         await message.reply_text(f"Ошибка конвертации: {e.stderr[:300]}")
-        await send_log(context, f"❌ Ошибка конвертации у {uid}: {e.stderr[:150]}")
+        await send_log(context, f"Ошибка конвертации у {uid}: {e.stderr[:150]}")
     except Exception as e:
         await message.reply_text(f"Ошибка: {str(e)[:300]}")
-        await send_log(context, f"❌ Ошибка у {uid}: {str(e)[:150]}")
+        await send_log(context, f"Ошибка у {uid}: {str(e)[:150]}")
     finally:
         for p in [input_path, output_path]:
             if os.path.exists(p):
