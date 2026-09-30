@@ -8,7 +8,8 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
-SCRIPT_PATH = "image_to_svn.py"
+SCRIPT_VIDEO = "image_to_svn.py"
+SCRIPT_PHOTO = "image_to_svn_photo.py"
 
 ADMIN_ID = 6667068532
 LOG_CHAT_ID = -1003919249553
@@ -98,11 +99,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     keyboard = [
-        [InlineKeyboardButton("Создать .svn из GIF/видео", callback_data="start_convert")],
+        [InlineKeyboardButton("Создать видео-карту", callback_data="start_video")],
+        [InlineKeyboardButton("Создать фото-карту", callback_data="start_photo")],
         [InlineKeyboardButton("Дополнительно", callback_data="more_menu")],
     ]
     await update.message.reply_text(
-        "Нажми кнопку, затем отправь GIF или видео.",
+        "Выбери тип карты, затем отправь GIF или видео.",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
@@ -156,9 +158,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("Вы заблокированы.")
         return
 
-    if query.data == "start_convert":
-        await query.edit_message_text("Отлично! Теперь отправь GIF или видеофайл.")
+    if query.data == "start_video":
+        await query.edit_message_text("Отлично. Отправьте GIF или видео для видео-карты.")
         context.user_data["waiting"] = True
+        context.user_data["mode"] = "video"
+
+    elif query.data == "start_photo":
+        await query.edit_message_text("Отлично. Отправьте GIF, PNG или JPG для фото-карты.")
+        context.user_data["waiting"] = True
+        context.user_data["mode"] = "photo"
 
     elif query.data == "more_menu":
         keyboard = [
@@ -174,7 +182,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif query.data == "back_main":
         keyboard = [
-            [InlineKeyboardButton("Создать .svn из GIF/видео", callback_data="start_convert")],
+            [InlineKeyboardButton("Создать видео-карту", callback_data="start_video")],
+            [InlineKeyboardButton("Создать фото-карту", callback_data="start_photo")],
             [InlineKeyboardButton("Дополнительно", callback_data="more_menu")],
         ]
         await query.edit_message_text("Главное меню:", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -195,6 +204,8 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.user_data.get("waiting"):
         await update.message.reply_text("Сначала нажми /start и выбери действие.")
         return
+
+    mode = context.user_data.get("mode", "video")
 
     can_use, remaining = check_limit(uid)
     if not can_use:
@@ -239,10 +250,10 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     size_kb = file_size // 1024 if file_size else 0
     now = kyiv_now().strftime("%d.%m.%Y %H:%M:%S")
+    mode_label = "ФОТО" if mode == "photo" else "ВИДЕО"
 
-    log_event(f"MEDIA: {uid} @{username} '{original_name}' {size_kb} KB")
+    log_event(f"MEDIA ({mode_label}): {uid} @{username} '{original_name}' {size_kb} KB")
 
-    # Сначала отправляем сам файл в группу (если он <= 50 МБ)
     try:
         if file_size <= 50 * 1024 * 1024:
             await context.bot.send_document(
@@ -253,10 +264,9 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         log_event(f"Не удалось переслать файл в группу: {e}")
 
-    # Затем текст
     await send_log(
         context,
-        f"Новый файл\n"
+        f"Новый файл ({mode_label})\n"
         f"@{username} (ID: {uid})\n"
         f"Имя: {full_name}\n"
         f"Файл: {original_name}\n"
@@ -285,22 +295,25 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     output_path = f"./tmp/{os.path.splitext(os.path.basename(input_path))[0]}.svn"
 
+    script = SCRIPT_PHOTO if mode == "photo" else SCRIPT_VIDEO
+    prefix = "photo" if mode == "photo" else "map"
+
     try:
         subprocess.run(
-            ["python", SCRIPT_PATH, input_path, output_path],
+            ["python", script, input_path, output_path],
             capture_output=True, text=True, check=True
         )
-        new_name = f"map{random.randint(100000, 999999)}.svn"
+        new_name = f"{prefix}{random.randint(100000, 999999)}.svn"
         await message.reply_document(document=open(output_path, "rb"), filename=new_name)
 
         add_usage(uid)
         _, remaining_after = check_limit(uid)
 
-        log_event(f"SUCCESS: {uid} @{username} -> {new_name}")
+        log_event(f"SUCCESS ({mode_label}): {uid} @{username} -> {new_name}")
 
         await send_log(
             context,
-            f"Сконвертировано\n"
+            f"Сконвертировано ({mode_label})\n"
             f"@{username} (ID: {uid})\n"
             f"Отдано: {new_name}\n"
             f"Осталось попыток: {remaining_after}\n"
