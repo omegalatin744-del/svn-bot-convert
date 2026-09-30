@@ -8,8 +8,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 SCRIPT_PATH = "image_to_svn.py"
 
-# Flask для health-check (запускается в фоне)
-flask_app = Flask(__name__)
+flask_app = Flask("bot")
 
 @flask_app.route("/")
 def home():
@@ -22,8 +21,6 @@ def health():
 def run_flask():
     port = int(os.environ.get("PORT", 5000))
     flask_app.run(host="0.0.0.0", port=port, use_reloader=False)
-
-# --- Логика бота ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("Создать .svn из GIF/видео", callback_data="start_convert")]]
@@ -81,16 +78,14 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 os.remove(p)
 
 def main():
-    # Flask — в фоне
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
 
-    # Бот — в главном потоке (так требует библиотека)
     application = Application.builder().token(TOKEN).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(MessageHandler(filters.VIDEO | filters.ANIMATION, handle_media))
     application.run_polling()
 
-if name == "__main__":
+if name == "main":
     main()
