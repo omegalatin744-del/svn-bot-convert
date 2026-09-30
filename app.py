@@ -87,5 +87,4 @@ def main():
     application.add_handler(MessageHandler(filters.VIDEO | filters.ANIMATION, handle_media))
     application.run_polling()
 
-if name == "main":
-    main()
+main()
