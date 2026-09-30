@@ -9,7 +9,7 @@ TOKEN = os.environ.get("TELEGRAM_TOKEN")
 SCRIPT_PATH = "image_to_svn.py"
 
 # Flask для health-check (запускается в фоне)
-flask_app = Flask(name)
+flask_app = Flask(__name__)
 
 @flask_app.route("/")
 def home():
@@ -92,5 +92,5 @@ def main():
     application.add_handler(MessageHandler(filters.VIDEO | filters.ANIMATION, handle_media))
     application.run_polling()
 
-if name == "main":
+if name == "__main__":
     main()
