@@ -15,7 +15,36 @@ LOG_CHAT_ID = -1003919249553
 
 KYIV_TZ = timedelta(hours=3)
 
+MOD_URL = "https://github.com/omegalatin744-del/svn-bot-convert/releases/download/1.0/HP0.4NoOpti.apk"
+
 BANNED_IDS = set()
+
+USAGE_LOG = {}
+LIMIT_PER_DAY = 3
+DAY_SECONDS = 24 * 60 * 60
+
+INFO_TEXT = (
+    "Информация\n\n"
+    "1. Путь к загруженному сохранению:\n\n"
+    "Android: /storage/emulated/0/Download/Telegram/\n"
+    "iOS: зависит от выбранной вами папки\n"
+    "Windows: C:\\Users\\<имя>\\Downloads\\Telegram Desktop\\\n"
+    "Linux: /home/<имя>/Downloads/Telegram Desktop/\n\n"
+    "2. Путь к сохранениям Hypper Sandbox:\n\n"
+    "Android: Android/data/com.Hypper/files/saves\n"
+    "iOS: /var/mobile/Containers/Data/Application/<UUID>/Documents/saves\n"
+    "Windows: C:\\Users\\<имя>\\AppData\\Local\\Hypper\\saves\n"
+    "Linux: /home/<имя_пользователя>/.local/share/Hypper/saves\n\n"
+    "Форматы файлов, которые принимаются ботом: GIF, MP4, PNG, JPG, JPEG, WEBP, BMP.\n\n"
+    "Мод на Hypper Sandbox:\n"
+    "HP0.4NoOpti — убирает оптимизацию мониторов на расстоянии "
+    "(текст и цветной фон на мониторах перестаёт быть невидным при дальних расстояниях). "
+    "Версия мода устарела.\n\n"
+    "Лимиты и тонкости:\n"
+    "• Формат MP4 имеет ограничение >20 МБ.\n"
+    "• GIF лучше отправлять файлом.\n"
+    "• Лимит конвертирований: 3 сохранения на 24 часа."
+)
 
 flask_app = Flask("bot")
 
@@ -44,7 +73,20 @@ async def send_log(context, text):
     except Exception as e:
         log_event(f"Не удалось отправить в группу логов: {e}")
 
-# ── Команды ──────────────────────────────────────────────────────────────────
+def check_limit(user_id):
+    now_ts = datetime.utcnow().timestamp()
+    times = USAGE_LOG.get(user_id, [])
+    times = [t for t in times if now_ts - t < DAY_SECONDS]
+    USAGE_LOG[user_id] = times
+    remaining = LIMIT_PER_DAY - len(times)
+    return remaining > 0, max(remaining, 0)
+
+def add_usage(user_id):
+    now_ts = datetime.utcnow().timestamp()
+    times = USAGE_LOG.get(user_id, [])
+    times = [t for t in times if now_ts - t < DAY_SECONDS]
+    times.append(now_ts)
+    USAGE_LOG[user_id] = times
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -52,7 +94,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Вы заблокированы и не можете пользоваться ботом.")
         await send_log(context, f"Забаненный {uid} попытался использовать /start")
         return
-    keyboard = [[InlineKeyboardButton("Создать .svn из GIF/видео", callback_data="start_convert")]]
+
+    keyboard = [
+        [InlineKeyboardButton("Создать .svn из GIF/видео", callback_data="start_convert")],
+        [InlineKeyboardButton("Дополнительно", callback_data="more_menu")],
+    ]
     await update.message.reply_text(
         "Нажми кнопку, затем отправь GIF или видео.",
         reply_markup=InlineKeyboardMarkup(keyboard)
@@ -97,18 +143,37 @@ async def list_banned(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ids = "\n".join(str(i) for i in BANNED_IDS)
         await update.message.reply_text(f"Забаненные user_id:\n{ids}")
 
-# ── Обработка медиа ──────────────────────────────────────────────────────────
-
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     uid = query.from_user.id
+
     if uid in BANNED_IDS:
         await query.edit_message_text("Вы заблокированы.")
         return
+
     if query.data == "start_convert":
-        await query.edit_message_text("Отлично, Теперь отправьте GIF или видеофайл.")
+        await query.edit_message_text("Отлично! Теперь отправь GIF или видеофайл.")
         context.user_data["waiting"] = True
+
+    elif query.data == "more_menu":
+        keyboard = [
+            [InlineKeyboardButton("Информация", callback_data="show_info")],
+            [InlineKeyboardButton("HP0.4NoOpti", url=MOD_URL)],
+            [InlineKeyboardButton("Назад", callback_data="back_main")],
+        ]
+        await query.edit_message_text("Дополнительно:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    elif query.data == "show_info":
+        keyboard = [[InlineKeyboardButton("Назад", callback_data="more_menu")]]
+        await query.edit_message_text(INFO_TEXT, reply_markup=InlineKeyboardMarkup(keyboard))
+
+    elif query.data == "back_main":
+        keyboard = [
+            [InlineKeyboardButton("Создать .svn из GIF/видео", callback_data="start_convert")],
+            [InlineKeyboardButton("Дополнительно", callback_data="more_menu")],
+        ]
+        await query.edit_message_text("Главное меню:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -122,7 +187,23 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if not context.user_data.get("waiting"):
-        await update.message.reply_text("Сначала нажмите /start и выбери действие.")
+        await update.message.reply_text("Сначала нажми /start и выбери действие.")
+        return
+
+    can_use, remaining = check_limit(uid)
+    if not can_use:
+        await update.message.reply_text(
+            "Лимит исчерпан.\n"
+            "Вы использовали 3 сохранения за последние 24 часа.\n"
+            "Попробуйте позже."
+        )
+        await send_log(
+            context,
+            f"Лимит исчерпан\n"
+            f"@{username} (ID: {uid})\n"
+            f"Имя: {full_name}\n"
+            f"Попытка отправить файл сверх лимита"
+        )
         return
 
     message = update.message
@@ -143,7 +224,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         original_name = message.document.file_name or "file"
         file_size = message.document.file_size
     else:
-        await message.reply_text("Пожалуйста, отправьте GIF, видео или файл-GIF.")
+        await message.reply_text("Пожалуйста, отправь GIF, видео или файл-гифку.")
         return
 
     size_kb = file_size // 1024 if file_size else 0
@@ -158,6 +239,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Имя: {full_name}\n"
         f"Файл: {original_name}\n"
         f"Размер: {size_kb} KB\n"
+        f"Осталось попыток: {remaining - 1}\n"
         f"{now}"
     )
 
@@ -188,12 +270,18 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         new_name = f"map{random.randint(100000, 999999)}.svn"
         await message.reply_document(document=open(output_path, "rb"), filename=new_name)
+
+        add_usage(uid)
+        _, remaining_after = check_limit(uid)
+
         log_event(f"SUCCESS: {uid} @{username} -> {new_name}")
+
         await send_log(
             context,
             f"Сконвертировано\n"
             f"@{username} (ID: {uid})\n"
             f"Отдано: {new_name}\n"
+            f"Осталось попыток: {remaining_after}\n"
             f"{kyiv_now().strftime('%d.%m.%Y %H:%M:%S')}"
         )
         context.user_data["waiting"] = False
