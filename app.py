@@ -10,6 +10,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 SCRIPT_VIDEO = "image_to_svn.py"
 SCRIPT_PHOTO = "image_to_svn_photo.py"
+SCRIPT_OPTI  = "opti_save.py"
 
 ADMIN_ID = 6667068532
 LOG_CHAT_ID = -1003919249553
@@ -22,6 +23,10 @@ BANNED_IDS = set()
 
 USAGE_LOG = {}
 LIMIT_PER_DAY = 3
+
+OPTI_LOG = {}
+OPTI_LIMIT_PER_DAY = 10
+
 DAY_SECONDS = 24 * 60 * 60
 
 INFO_TEXT = (
@@ -45,6 +50,14 @@ INFO_TEXT = (
     "• Формат MP4 имеет ограничение >20 МБ.\n"
     "• GIF лучше отправлять файлом.\n"
     "• Лимит конвертирований: 3 сохранения на 24 часа."
+)
+
+OPTI_TEXT = (
+    "Opti-save\n\n"
+    "Оптимизировать — сжимает .svn в формат .svnz (короткие ключи + таблица имён). "
+    "Файл становится в 2-3 раза меньше, но полностью восстанавливаемым.\n\n"
+    "Деоптимизировать — разворачивает .svnz обратно в стандартный .svn.\n\n"
+    "Лимит: 10 операций в сутки (общий на обе кнопки)."
 )
 
 flask_app = Flask("bot")
@@ -74,20 +87,20 @@ async def send_log(context, text):
     except Exception as e:
         log_event(f"Не удалось отправить в группу логов: {e}")
 
-def check_limit(user_id):
+def check_limit(user_id, log_dict, limit):
     now_ts = datetime.utcnow().timestamp()
-    times = USAGE_LOG.get(user_id, [])
+    times = log_dict.get(user_id, [])
     times = [t for t in times if now_ts - t < DAY_SECONDS]
-    USAGE_LOG[user_id] = times
-    remaining = LIMIT_PER_DAY - len(times)
+    log_dict[user_id] = times
+    remaining = limit - len(times)
     return remaining > 0, max(remaining, 0)
 
-def add_usage(user_id):
+def add_usage(user_id, log_dict):
     now_ts = datetime.utcnow().timestamp()
-    times = USAGE_LOG.get(user_id, [])
+    times = log_dict.get(user_id, [])
     times = [t for t in times if now_ts - t < DAY_SECONDS]
     times.append(now_ts)
-    USAGE_LOG[user_id] = times
+    log_dict[user_id] = times
 
 # ── Команды ──────────────────────────────────────────────────────────────────
 
@@ -101,10 +114,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("Создать видео-карту", callback_data="start_video")],
         [InlineKeyboardButton("Создать фото-карту", callback_data="start_photo")],
+        [InlineKeyboardButton("Opti-save", callback_data="opti_menu")],
         [InlineKeyboardButton("Дополнительно", callback_data="more_menu")],
     ]
     await update.message.reply_text(
-        "Выбери тип карты, затем отправь GIF или видео.",
+        "Выбери действие, затем отправь файл.",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
@@ -168,6 +182,24 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["waiting"] = True
         context.user_data["mode"] = "photo"
 
+    elif query.data == "opti_menu":
+        keyboard = [
+            [InlineKeyboardButton("Оптимизировать", callback_data="opti_optimize")],
+            [InlineKeyboardButton("Деоптимизировать", callback_data="opti_deoptimize")],
+            [InlineKeyboardButton("Назад", callback_data="back_main")],
+        ]
+        await query.edit_message_text(OPTI_TEXT, reply_markup=InlineKeyboardMarkup(keyboard))
+
+    elif query.data == "opti_optimize":
+        await query.edit_message_text("Отправь .svn-файл для оптимизации.")
+        context.user_data["waiting"] = True
+        context.user_data["mode"] = "opti_optimize"
+
+    elif query.data == "opti_deoptimize":
+        await query.edit_message_text("Отправь .svnz-файл для деоптимизации.")
+        context.user_data["waiting"] = True
+        context.user_data["mode"] = "opti_deoptimize"
+
     elif query.data == "more_menu":
         keyboard = [
             [InlineKeyboardButton("Информация", callback_data="show_info")],
@@ -184,6 +216,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [
             [InlineKeyboardButton("Создать видео-карту", callback_data="start_video")],
             [InlineKeyboardButton("Создать фото-карту", callback_data="start_photo")],
+            [InlineKeyboardButton("Opti-save", callback_data="opti_menu")],
             [InlineKeyboardButton("Дополнительно", callback_data="more_menu")],
         ]
         await query.edit_message_text("Главное меню:", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -207,21 +240,28 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     mode = context.user_data.get("mode", "video")
 
-    can_use, remaining = check_limit(uid)
-    if not can_use:
-        await update.message.reply_text(
-            "Лимит исчерпан.\n"
-            "Вы использовали 3 сохранения за последние 24 часа.\n"
-            "Попробуйте позже."
-        )
-        await send_log(
-            context,
-            f"Лимит исчерпан\n"
-            f"@{username} (ID: {uid})\n"
-            f"Имя: {full_name}\n"
-            f"Попытка отправить файл сверх лимита"
-        )
-        return
+    if mode in ("opti_optimize", "opti_deoptimize"):
+        can_use, remaining = check_limit(uid, OPTI_LOG, OPTI_LIMIT_PER_DAY)
+        if not can_use:
+            await update.message.reply_text(
+                "Лимит Opti-save исчерпан (10 операций за 24 часа)."
+            )
+            await send_log(
+                context,
+                f"Opti-save лимит исчерпан\n@{username} (ID: {uid})\nИмя: {full_name}"
+            )
+            return
+    else:
+        can_use, remaining = check_limit(uid, USAGE_LOG, LIMIT_PER_DAY)
+        if not can_use:
+            await update.message.reply_text(
+                "Лимит исчерпан.\nВы использовали 3 сохранения за последние 24 часа."
+            )
+            await send_log(
+                context,
+                f"Лимит исчерпан\n@{username} (ID: {uid})\nИмя: {full_name}"
+            )
+            return
 
     message = update.message
     file_obj = None
@@ -229,7 +269,12 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file_size = 0
     file_id = None
 
-    if message.video:
+    if message.document:
+        file_obj = await message.document.get_file()
+        original_name = message.document.file_name or "file"
+        file_size = message.document.file_size
+        file_id = message.document.file_id
+    elif message.video:
         file_obj = await message.video.get_file()
         original_name = message.video.file_name or "video.mp4"
         file_size = message.video.file_size
@@ -239,18 +284,34 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         original_name = message.animation.file_name or "animation.gif"
         file_size = message.animation.file_size
         file_id = message.animation.file_id
-    elif message.document:
-        file_obj = await message.document.get_file()
-        original_name = message.document.file_name or "file"
-        file_size = message.document.file_size
-        file_id = message.document.file_id
     else:
-        await message.reply_text("Пожалуйста, отправь GIF, видео или файл-гифку.")
+        await message.reply_text("Пожалуйста, отправь файл.")
         return
+
+    # Проверка расширений для Opti-save
+    if mode == "opti_optimize":
+        if original_name.lower().endswith(".svnz"):
+            await message.reply_text("Этот файл уже сжат (.svnz). Деоптимизируйте его сначала.")
+            return
+        if not original_name.lower().endswith(".svn"):
+            await message.reply_text("Для оптимизации нужен .svn-файл.")
+            return
+    elif mode == "opti_deoptimize":
+        if not original_name.lower().endswith(".svnz"):
+            await message.reply_text("Для деоптимизации нужен .svnz-файл.")
+            return
 
     size_kb = file_size // 1024 if file_size else 0
     now = kyiv_now().strftime("%d.%m.%Y %H:%M:%S")
-    mode_label = "ФОТО" if mode == "photo" else "ВИДЕО"
+
+    if mode == "video":
+        mode_label = "ВИДЕО"
+    elif mode == "photo":
+        mode_label = "ФОТО"
+    elif mode == "opti_optimize":
+        mode_label = "OPTI"
+    else:
+        mode_label = "DEOPTI"
 
     log_event(f"MEDIA ({mode_label}): {uid} @{username} '{original_name}' {size_kb} KB")
 
@@ -279,6 +340,55 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     input_path = f"./tmp/{original_name}"
     await file_obj.download_to_drive(input_path)
 
+    # ── Opti-save ─────────────────────────────────────────────────────────────
+    if mode in ("opti_optimize", "opti_deoptimize"):
+        action = "compress" if mode == "opti_optimize" else "decompress"
+        if action == "compress":
+            output_path = f"./tmp/opti_{os.path.splitext(os.path.basename(input_path))[0]}.svnz"
+        else:
+            output_path = f"./tmp/opti_{os.path.splitext(os.path.basename(input_path))[0]}.svn"
+
+        try:
+            result = subprocess.run(
+                ["python", SCRIPT_OPTI, action, input_path, output_path],
+                capture_output=True, text=True, check=True
+            )
+            if action == "compress":
+                new_name = f"{os.path.splitext(original_name)[0]}.svnz"
+            else:
+                new_name = f"{os.path.splitext(original_name)[0]}.svn"
+
+            await message.reply_document(document=open(output_path, "rb"), filename=new_name)
+
+            add_usage(uid, OPTI_LOG)
+            _, remaining_after = check_limit(uid, OPTI_LOG, OPTI_LIMIT_PER_DAY)
+
+            log_event(f"SUCCESS ({mode_label}): {uid} @{username} -> {new_name}")
+            await send_log(
+                context,
+                f"Готово ({mode_label})\n"
+                f"@{username} (ID: {uid})\n"
+                f"Отдано: {new_name}\n"
+                f"Осталось попыток: {remaining_after}\n"
+                f"{kyiv_now().strftime('%d.%m.%Y %H:%M:%S')}"
+            )
+            context.user_data["waiting"] = False
+        except subprocess.CalledProcessError as e:
+            await message.reply_text(f"Ошибка Opti-save: {e.stderr[:300]}")
+            await send_log(context, f"Ошибка Opti-save у {uid}: {e.stderr[:150]}")
+        except Exception as e:
+            await message.reply_text(f"Ошибка: {str(e)[:300]}")
+            await send_log(context, f"Ошибка у {uid}: {str(e)[:150]}")
+        finally:
+            for p in [input_path, output_path]:
+                if os.path.exists(p):
+                    try:
+                        os.remove(p)
+                    except:
+                        pass
+        return
+
+    # ── mp4 -> gif для карт ───────────────────────────────────────────────────
     if input_path.lower().endswith(".mp4"):
         gif_path = os.path.splitext(input_path)[0] + ".gif"
         try:
@@ -293,6 +403,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await send_log(context, f"Ошибка ffmpeg у {uid}: {e.stderr.decode()[:100]}")
             return
 
+    # ── Видео / фото ──────────────────────────────────────────────────────────
     output_path = f"./tmp/{os.path.splitext(os.path.basename(input_path))[0]}.svn"
 
     if mode == "photo":
@@ -310,11 +421,10 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         new_name = f"{prefix}{random.randint(100000, 999999)}.svn"
         await message.reply_document(document=open(output_path, "rb"), filename=new_name)
 
-        add_usage(uid)
-        _, remaining_after = check_limit(uid)
+        add_usage(uid, USAGE_LOG)
+        _, remaining_after = check_limit(uid, USAGE_LOG, LIMIT_PER_DAY)
 
         log_event(f"SUCCESS ({mode_label}): {uid} @{username} -> {new_name}")
-
         await send_log(
             context,
             f"Сконвертировано ({mode_label})\n"
