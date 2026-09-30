@@ -2,7 +2,7 @@ import os
 import threading
 import subprocess
 import random
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
@@ -12,6 +12,8 @@ SCRIPT_PATH = "image_to_svn.py"
 
 ADMIN_ID = 6667068532
 LOG_CHAT_ID = -1003919249553
+
+KYIV_TZ = timedelta(hours=3)
 
 BANNED_IDS = set()
 
@@ -29,8 +31,11 @@ def run_flask():
     port = int(os.environ.get("PORT", 5000))
     flask_app.run(host="0.0.0.0", port=port, use_reloader=False)
 
+def kyiv_now():
+    return datetime.utcnow() + KYIV_TZ
+
 def log_event(text):
-    ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    ts = kyiv_now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"[LOG {ts}] {text}", flush=True)
 
 async def send_log(context, text):
@@ -142,7 +147,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     size_kb = file_size // 1024 if file_size else 0
-    now = datetime.utcnow().strftime("%d.%m.%Y %H:%M:%S")
+    now = kyiv_now().strftime("%d.%m.%Y %H:%M:%S")
 
     log_event(f"MEDIA: {uid} @{username} '{original_name}' {size_kb} KB")
 
@@ -153,7 +158,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Имя: {full_name}\n"
         f"Файл: {original_name}\n"
         f"Размер: {size_kb} KB\n"
-        f"{now} UTC"
+        f"{now} Kyiv"
     )
 
     os.makedirs("./tmp", exist_ok=True)
@@ -189,7 +194,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Сконвертировано\n"
             f"@{username} (ID: {uid})\n"
             f"Отдано: {new_name}\n"
-            f"{datetime.utcnow().strftime('%d.%m.%Y %H:%M:%S')} UTC"
+            f"{kyiv_now().strftime('%d.%m.%Y %H:%M:%S')} Kyiv"
         )
         context.user_data["waiting"] = False
     except subprocess.CalledProcessError as e:
