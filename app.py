@@ -1,6 +1,7 @@
 import os
 import threading
 import subprocess
+import random
 from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
@@ -62,7 +63,6 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     input_path = f"./tmp/{original_name}"
     await file_obj.download_to_drive(input_path)
 
-    # Если mp4 — конвертируем в gif через ffmpeg
     if input_path.lower().endswith(".mp4"):
         gif_path = os.path.splitext(input_path)[0] + ".gif"
         try:
@@ -83,7 +83,9 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ["python", SCRIPT_PATH, input_path, output_path],
             capture_output=True, text=True, check=True
         )
-        await message.reply_document(document=open(output_path, "rb"), filename="map.svn")
+
+        new_name = f"map{random.randint(100000, 999999)}.svn"
+        await message.reply_document(document=open(output_path, "rb"), filename=new_name)
         context.user_data["waiting"] = False
     except subprocess.CalledProcessError as e:
         await message.reply_text(f"Ошибка конвертации: {e.stderr[:300]}")
