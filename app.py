@@ -30,13 +30,10 @@ OPTI_LIMIT_PER_DAY = 10
 
 DAY_SECONDS = 24 * 60 * 60
 
-# ── Unlimited ────────────────────────────────────────────────────────────────
-# UNLIMITED = { user_id: { "video": expire_ts_or_None, "photo": ..., "mini": ..., "opti": ... } }
 UNLIMITED = {}
 
 
 def parse_duration(s):
-    """Parse '24h', '7d', 'forever' or '' -> expire_ts or None."""
     s = (s or "").strip().lower()
     if s in ("", "forever", "inf", "infinity"):
         return None
@@ -66,7 +63,6 @@ def duration_label(expire_ts):
 
 
 def has_unlimited(user_id, kind):
-    """kind: video/photo/mini/opti. Returns True if user has active unlimited."""
     entry = UNLIMITED.get(user_id)
     if not entry:
         return False
@@ -100,17 +96,6 @@ def revoke_unlimited(user_id):
     UNLIMITED.pop(user_id, None)
 
 
-def unlimited_label(user_id):
-    entry = UNLIMITED.get(user_id)
-    if not entry:
-        return None
-    parts = []
-    for k in ("video", "photo", "mini", "opti", "all"):
-        if k in entry:
-            parts.append(f"{k}: {duration_label(entry[k])}")
-    return ", ".join(parts) if parts else None
-
-
 INFO_TEXT = (
     "Информация\n\n"
     "1. Путь к загруженному сохранению:\n\n"
@@ -132,11 +117,14 @@ INFO_TEXT = (
     "В отличии от некоторых систем, файл можно оптимизировать, а также деоптимизировать до первоначального состояния.\n"
     "Система проверялась на сохранениях, и она полностью рабочая, "
     "но шанс повредить файл никогда не равен нулю.\n\n"
+    "ITS mini — упрощённая модель image to svn, адаптированная к использованию результата "
+    "в режиме мультиплеера. В отличии от обычных видео-карт, которые идут от ± 3000 объектов, "
+    "эта функция выдаёт сохранение с жёстким ограничением: до 909 пропов, до 8 кадров.\n\n"
     "Лимиты и тонкости:\n\n"
     "Формат MP4 имеет ограничение >20 МБ.\n"
     "GIF лучше отправлять файлом.\n\n"
     "Лимит конвертирований:\n"
-    "3 конвертирования видео/фото карт на 24 часа.\n"
+    "3 конвертирования видео/фото или же ITS mini карт на 24 часа.\n"
     "10 оптимизаций/деоптимизаций на 24 часа"
 )
 
@@ -404,7 +392,6 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     mode = context.user_data.get("mode", "video")
 
-    # Определяем, к какому типу лимита относится режим
     if mode in ("opti_optimize", "opti_deoptimize"):
         kind = "opti"
         log_dict = OPTI_LOG
@@ -422,7 +409,6 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         log_dict = USAGE_LOG
         limit = LIMIT_PER_DAY
 
-    # Проверка безлимита
     unlimited = has_unlimited(uid, kind)
 
     if not unlimited:
@@ -442,7 +428,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
     else:
-        remaining = None  # безлимит
+        remaining = None
 
     message = update.message
     file_obj = None
@@ -527,7 +513,6 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     input_path = f"./tmp/{original_name}"
     await file_obj.download_to_drive(input_path)
 
-    # ── Opti-save ─────────────────────────────────────────────────────────────
     if mode in ("opti_optimize", "opti_deoptimize"):
         action = "compress" if mode == "opti_optimize" else "decompress"
         if action == "compress":
@@ -580,7 +565,6 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         pass
         return
 
-    # ── mp4 -> gif ────────────────────────────────────────────────────────────
     if input_path.lower().endswith(".mp4"):
         gif_path = os.path.splitext(input_path)[0] + ".gif"
         try:
@@ -595,7 +579,6 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await send_log(context, f"Ошибка ffmpeg у {uid}: {e.stderr.decode()[:100]}")
             return
 
-    # ── Карты ─────────────────────────────────────────────────────────────────
     output_path = f"./tmp/{os.path.splitext(os.path.basename(input_path))[0]}.svn"
 
     if mode == "photo":
