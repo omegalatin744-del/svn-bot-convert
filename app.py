@@ -35,7 +35,7 @@ INFO_TEXT = (
     "Android: /storage/emulated/0/Download/Telegram/\n"
     "iOS: зависит от выбранной вами папки\n"
     "Windows: C:\\Users\\<имя>\\Downloads\\Telegram Desktop\\\n"
-    "Linux: /home/<имя>/Downloads/Telegram Desktop/\n\n"
+    "Linux: /home/<имя>/Downloads/Telegram Desktop\n\n"
     "2. Путь к сохранениям Hypper Sandbox:\n\n"
     "Android: Android/data/com.Hypper/files/saves\n"
     "iOS: /var/mobile/Containers/Data/Application/<UUID>/Documents/saves\n"
@@ -43,13 +43,19 @@ INFO_TEXT = (
     "Linux: /home/<имя_пользователя>/.local/share/Hypper/saves\n\n"
     "Форматы файлов, которые принимаются ботом: GIF, MP4, PNG, JPG, JPEG, WEBP, BMP.\n\n"
     "Мод на Hypper Sandbox:\n"
-    "HP0.4NoOpti — убирает оптимизацию мониторов на расстоянии "
-    "(текст и цветной фон на мониторах перестаёт быть невидным при дальних расстояниях). "
+    "NP0.4NoOpti — убирает оптимизацию мониторов на расстоянии. "
+    "(Текст и цветной фон на мониторах не перестаёт быть невидным при дальних расстояниях). "
     "Версия мода устарела.\n\n"
-    "Лимиты и тонкости:\n"
-    "• Формат MP4 имеет ограничение >20 МБ.\n"
-    "• GIF лучше отправлять файлом.\n"
-    "• Лимит конвертирований: 3 сохранения на 24 часа."
+    "Opti-save — это система оптимизирования веса сохранения путём сжатия. "
+    "В отличии от некоторых систем, файл можно оптимизировать, а также деоптимизировать до первоначального состояния.\n"
+    "Система проверялась на сохранениях, и она полностью рабочая, "
+    "но шанс повредить файл никогда не равен нулю.\n\n"
+    "Лимиты и тонкости:\n\n"
+    "Формат MP4 имеет ограничение >20 МБ.\n"
+    "GIF лучше отправлять файлом.\n\n"
+    "Лимит конвертирований:\n"
+    "3 конвертирования видео/фото карт на 24 часа.\n"
+    "10 оптимизаций/деоптимизаций на 24 часа"
 )
 
 OPTI_TEXT = (
@@ -288,7 +294,6 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await message.reply_text("Пожалуйста, отправь файл.")
         return
 
-    # Проверка расширений для Opti-save
     if mode == "opti_optimize":
         if original_name.lower().endswith(".svnz"):
             await message.reply_text("Этот файл уже сжат (.svnz). Деоптимизируйте его сначала.")
@@ -340,7 +345,6 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     input_path = f"./tmp/{original_name}"
     await file_obj.download_to_drive(input_path)
 
-    # ── Opti-save ─────────────────────────────────────────────────────────────
     if mode in ("opti_optimize", "opti_deoptimize"):
         action = "compress" if mode == "opti_optimize" else "decompress"
         if action == "compress":
@@ -349,7 +353,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             output_path = f"./tmp/opti_{os.path.splitext(os.path.basename(input_path))[0]}.svn"
 
         try:
-            result = subprocess.run(
+            subprocess.run(
                 ["python", SCRIPT_OPTI, action, input_path, output_path],
                 capture_output=True, text=True, check=True
             )
@@ -388,7 +392,6 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         pass
         return
 
-    # ── mp4 -> gif для карт ───────────────────────────────────────────────────
     if input_path.lower().endswith(".mp4"):
         gif_path = os.path.splitext(input_path)[0] + ".gif"
         try:
@@ -403,7 +406,6 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await send_log(context, f"Ошибка ffmpeg у {uid}: {e.stderr.decode()[:100]}")
             return
 
-    # ── Видео / фото ──────────────────────────────────────────────────────────
     output_path = f"./tmp/{os.path.splitext(os.path.basename(input_path))[0]}.svn"
 
     if mode == "photo":
