@@ -130,10 +130,6 @@ INFO_TEXT = (
 
 OPTI_TEXT = (
     "Opti-save\n\n"
-    "Оптимизировать — сжимает .svn в формат .svnz (короткие ключи + таблица имён). "
-    "Файл становится в 2-3 раза меньше, но полностью восстанавливаемым.\n\n"
-    "Деоптимизировать — разворачивает .svnz обратно в стандартный .svn.\n\n"
-    "Лимит: 10 операций в сутки (общий на обе кнопки)."
 )
 
 flask_app = Flask("bot")
@@ -195,7 +191,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("Дополнительно", callback_data="more_menu")],
     ]
     await update.message.reply_text(
-        "Выбери действие, затем отправь файл.",
+        "Главное меню",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
@@ -319,17 +315,17 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if query.data == "start_video":
-        await query.edit_message_text("Отлично! Отправь GIF или видео для видео-карты.")
+        await query.edit_message_text("Отлично. Отправьте GIF или видео для видео-карты.")
         context.user_data["waiting"] = True
         context.user_data["mode"] = "video"
 
     elif query.data == "start_photo":
-        await query.edit_message_text("Отлично! Отправь GIF, PNG или JPG для фото-карты.")
+        await query.edit_message_text("Отлично. Отправьте GIF, PNG или JPG для фото-карты.")
         context.user_data["waiting"] = True
         context.user_data["mode"] = "photo"
 
     elif query.data == "start_mini":
-        await query.edit_message_text("Отлично! Отправь GIF или видео для ITM mini.")
+        await query.edit_message_text("Отлично. Отправьте GIF или видео для ITM mini.")
         context.user_data["waiting"] = True
         context.user_data["mode"] = "mini"
 
@@ -342,12 +338,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(OPTI_TEXT, reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif query.data == "opti_optimize":
-        await query.edit_message_text("Отправь .svn-файл для оптимизации.")
+        await query.edit_message_text("Отправье .svn-файл для оптимизации.")
         context.user_data["waiting"] = True
         context.user_data["mode"] = "opti_optimize"
 
     elif query.data == "opti_deoptimize":
-        await query.edit_message_text("Отправь .svnz-файл для деоптимизации.")
+        await query.edit_message_text("Отправьте .svnz-файл для деоптимизации.")
         context.user_data["waiting"] = True
         context.user_data["mode"] = "opti_deoptimize"
 
@@ -387,7 +383,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if not context.user_data.get("waiting"):
-        await update.message.reply_text("Сначала нажми /start и выбери действие.")
+        await update.message.reply_text("Сначала нажмите /start и выбери действие.")
         return
 
     mode = context.user_data.get("mode", "video")
@@ -457,7 +453,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if mode == "opti_optimize":
         if original_name.lower().endswith(".svnz"):
-            await message.reply_text("Этот файл уже сжат (.svnz). Деоптимизируйте его сначала.")
+            await message.reply_text("Этот файл уже сжат (.svnz). ")
             return
         if not original_name.lower().endswith(".svn"):
             await message.reply_text("Для оптимизации нужен .svn-файл.")
