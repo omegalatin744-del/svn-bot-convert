@@ -10,6 +10,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 SCRIPT_VIDEO = "image_to_svn.py"
 SCRIPT_PHOTO = "image_to_svn_photo.py"
+SCRIPT_MINI  = "image_to_svn_mini.py"
 SCRIPT_OPTI  = "opti_save.py"
 
 ADMIN_ID = 6667068532
@@ -28,6 +29,87 @@ OPTI_LOG = {}
 OPTI_LIMIT_PER_DAY = 10
 
 DAY_SECONDS = 24 * 60 * 60
+
+# ── Unlimited ────────────────────────────────────────────────────────────────
+# UNLIMITED = { user_id: { "video": expire_ts_or_None, "photo": ..., "mini": ..., "opti": ... } }
+UNLIMITED = {}
+
+
+def parse_duration(s):
+    """Parse '24h', '7d', 'forever' or '' -> expire_ts or None."""
+    s = (s or "").strip().lower()
+    if s in ("", "forever", "inf", "infinity"):
+        return None
+    try:
+        if s.endswith("h"):
+            return datetime.utcnow().timestamp() + int(s[:-1]) * 3600
+        if s.endswith("d"):
+            return datetime.utcnow().timestamp() + int(s[:-1]) * 86400
+        if s.endswith("m"):
+            return datetime.utcnow().timestamp() + int(s[:-1]) * 60
+    except ValueError:
+        return None
+    return None
+
+
+def duration_label(expire_ts):
+    if expire_ts is None:
+        return "forever"
+    left = int(expire_ts - datetime.utcnow().timestamp())
+    if left <= 0:
+        return "expired"
+    if left < 3600:
+        return f"{left // 60}m"
+    if left < 86400:
+        return f"{left // 3600}h"
+    return f"{left // 86400}d"
+
+
+def has_unlimited(user_id, kind):
+    """kind: video/photo/mini/opti. Returns True if user has active unlimited."""
+    entry = UNLIMITED.get(user_id)
+    if not entry:
+        return False
+    ts = entry.get(kind)
+    if kind == "all":
+        ts_all = entry.get("all")
+        if ts_all is None and "all" in entry:
+            return True
+        if ts_all is not None:
+            if ts_all > datetime.utcnow().timestamp():
+                return True
+            else:
+                entry.pop("all", None)
+    if ts is None and kind in entry:
+        return True
+    if ts is not None:
+        if ts > datetime.utcnow().timestamp():
+            return True
+        else:
+            entry.pop(kind, None)
+    return False
+
+
+def grant_unlimited(user_id, kinds, expire_ts):
+    entry = UNLIMITED.setdefault(user_id, {})
+    for k in kinds:
+        entry[k] = expire_ts
+
+
+def revoke_unlimited(user_id):
+    UNLIMITED.pop(user_id, None)
+
+
+def unlimited_label(user_id):
+    entry = UNLIMITED.get(user_id)
+    if not entry:
+        return None
+    parts = []
+    for k in ("video", "photo", "mini", "opti", "all"):
+        if k in entry:
+            parts.append(f"{k}: {duration_label(entry[k])}")
+    return ", ".join(parts) if parts else None
+
 
 INFO_TEXT = (
     "Информация\n\n"
@@ -60,7 +142,10 @@ INFO_TEXT = (
 
 OPTI_TEXT = (
     "Opti-save\n\n"
-    
+    "Оптимизировать — сжимает .svn в формат .svnz (короткие ключи + таблица имён). "
+    "Файл становится в 2-3 раза меньше, но полностью восстанавливаемым.\n\n"
+    "Деоптимизировать — разворачивает .svnz обратно в стандартный .svn.\n\n"
+    "Лимит: 10 операций в сутки (общий на обе кнопки)."
 )
 
 flask_app = Flask("bot")
@@ -118,6 +203,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("Создать видео-карту", callback_data="start_video")],
         [InlineKeyboardButton("Создать фото-карту", callback_data="start_photo")],
         [InlineKeyboardButton("Opti-save", callback_data="opti_menu")],
+        [InlineKeyboardButton("ITM mini", callback_data="start_mini")],
         [InlineKeyboardButton("Дополнительно", callback_data="more_menu")],
     ]
     await update.message.reply_text(
@@ -164,6 +250,75 @@ async def list_banned(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ids = "\n".join(str(i) for i in BANNED_IDS)
         await update.message.reply_text(f"Забаненные user_id:\n{ids}")
 
+async def unlimited_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    args = context.args
+    if len(args) < 2:
+        await update.message.reply_text(
+            "Использование:\n"
+            "/unlimited <id> <kind> [time]\n\n"
+            "kind: video | photo | mini | opti | all\n"
+            "time: 24h | 7d | 30d | forever (по умолчанию forever)\n\n"
+            "Примеры:\n"
+            "/unlimited 123456789 video 24h\n"
+            "/unlimited 123456789 all\n"
+            "/unlimited 123456789 opti 7d"
+        )
+        return
+    try:
+        target = int(args[0])
+    except ValueError:
+        await update.message.reply_text("user_id должен быть числом.")
+        return
+
+    kind = args[1].lower()
+    valid_kinds = ("video", "photo", "mini", "opti", "all")
+    if kind not in valid_kinds:
+        await update.message.reply_text(f"kind должен быть одним из: {', '.join(valid_kinds)}")
+        return
+
+    duration = args[2] if len(args) > 2 else "forever"
+    expire_ts = parse_duration(duration)
+
+    grant_unlimited(target, [kind], expire_ts)
+    label = duration_label(expire_ts)
+
+    await update.message.reply_text(f"Безлимит выдан: {target} / {kind} / {label}")
+    await send_log(context, f"Безлимит выдан\nID: {target}\nТип: {kind}\nСрок: {label}")
+
+
+async def limited_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    if not context.args:
+        await update.message.reply_text("Использование: /limited <user_id>")
+        return
+    try:
+        target = int(context.args[0])
+        revoke_unlimited(target)
+        await update.message.reply_text(f"Безлимит снят с {target}.")
+        await send_log(context, f"Безлимит снят\nID: {target}")
+    except ValueError:
+        await update.message.reply_text("user_id должен быть числом.")
+
+
+async def list_unlimited(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    if not UNLIMITED:
+        await update.message.reply_text("Список безлимита пуст.")
+        return
+    lines = []
+    for uid, entry in UNLIMITED.items():
+        parts = []
+        for k in ("video", "photo", "mini", "opti", "all"):
+            if k in entry:
+                parts.append(f"{k}:{duration_label(entry[k])}")
+        lines.append(f"{uid}: {', '.join(parts)}")
+    await update.message.reply_text("Безлимит:\n" + "\n".join(lines))
+
+
 # ── Кнопки ───────────────────────────────────────────────────────────────────
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -184,6 +339,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("Отлично! Отправь GIF, PNG или JPG для фото-карты.")
         context.user_data["waiting"] = True
         context.user_data["mode"] = "photo"
+
+    elif query.data == "start_mini":
+        await query.edit_message_text("Отлично! Отправь GIF или видео для ITM mini.")
+        context.user_data["waiting"] = True
+        context.user_data["mode"] = "mini"
 
     elif query.data == "opti_menu":
         keyboard = [
@@ -220,6 +380,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("Создать видео-карту", callback_data="start_video")],
             [InlineKeyboardButton("Создать фото-карту", callback_data="start_photo")],
             [InlineKeyboardButton("Opti-save", callback_data="opti_menu")],
+            [InlineKeyboardButton("ITM mini", callback_data="start_mini")],
             [InlineKeyboardButton("Дополнительно", callback_data="more_menu")],
         ]
         await query.edit_message_text("Главное меню:", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -243,28 +404,45 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     mode = context.user_data.get("mode", "video")
 
+    # Определяем, к какому типу лимита относится режим
     if mode in ("opti_optimize", "opti_deoptimize"):
-        can_use, remaining = check_limit(uid, OPTI_LOG, OPTI_LIMIT_PER_DAY)
-        if not can_use:
-            await update.message.reply_text(
-                "Лимит Opti-save исчерпан (10 операций за 24 часа)."
-            )
-            await send_log(
-                context,
-                f"Opti-save лимит исчерпан\n@{username} (ID: {uid})\nИмя: {full_name}"
-            )
-            return
+        kind = "opti"
+        log_dict = OPTI_LOG
+        limit = OPTI_LIMIT_PER_DAY
+    elif mode == "photo":
+        kind = "photo"
+        log_dict = USAGE_LOG
+        limit = LIMIT_PER_DAY
+    elif mode == "mini":
+        kind = "mini"
+        log_dict = USAGE_LOG
+        limit = LIMIT_PER_DAY
     else:
-        can_use, remaining = check_limit(uid, USAGE_LOG, LIMIT_PER_DAY)
+        kind = "video"
+        log_dict = USAGE_LOG
+        limit = LIMIT_PER_DAY
+
+    # Проверка безлимита
+    unlimited = has_unlimited(uid, kind)
+
+    if not unlimited:
+        can_use, remaining = check_limit(uid, log_dict, limit)
         if not can_use:
-            await update.message.reply_text(
-                "Лимит исчерпан.\nВы использовали 3 сохранения за последние 24 часа."
-            )
+            if kind == "opti":
+                await update.message.reply_text(
+                    "Лимит Opti-save исчерпан (10 операций за 24 часа)."
+                )
+            else:
+                await update.message.reply_text(
+                    "Лимит исчерпан.\nВы использовали 3 сохранения за последние 24 часа."
+                )
             await send_log(
                 context,
                 f"Лимит исчерпан\n@{username} (ID: {uid})\nИмя: {full_name}"
             )
             return
+    else:
+        remaining = None  # безлимит
 
     message = update.message
     file_obj = None
@@ -310,6 +488,8 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mode_label = "ВИДЕО"
     elif mode == "photo":
         mode_label = "ФОТО"
+    elif mode == "mini":
+        mode_label = "MINI"
     elif mode == "opti_optimize":
         mode_label = "OPTI"
     else:
@@ -327,6 +507,11 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         log_event(f"Не удалось переслать файл в группу: {e}")
 
+    if unlimited:
+        remaining_line = "Безлимит"
+    else:
+        remaining_line = f"Осталось попыток: {remaining - 1}"
+
     await send_log(
         context,
         f"Новый файл ({mode_label})\n"
@@ -334,7 +519,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Имя: {full_name}\n"
         f"Файл: {original_name}\n"
         f"Размер: {size_kb} KB\n"
-        f"Осталось попыток: {remaining - 1}\n"
+        f"{remaining_line}\n"
         f"{now}"
     )
 
@@ -342,6 +527,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     input_path = f"./tmp/{original_name}"
     await file_obj.download_to_drive(input_path)
 
+    # ── Opti-save ─────────────────────────────────────────────────────────────
     if mode in ("opti_optimize", "opti_deoptimize"):
         action = "compress" if mode == "opti_optimize" else "decompress"
         if action == "compress":
@@ -361,16 +547,21 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             await message.reply_document(document=open(output_path, "rb"), filename=new_name)
 
-            add_usage(uid, OPTI_LOG)
-            _, remaining_after = check_limit(uid, OPTI_LOG, OPTI_LIMIT_PER_DAY)
+            if not unlimited:
+                add_usage(uid, OPTI_LOG)
+                _, remaining_after = check_limit(uid, OPTI_LOG, OPTI_LIMIT_PER_DAY)
+            else:
+                remaining_after = None
 
             log_event(f"SUCCESS ({mode_label}): {uid} @{username} -> {new_name}")
+            after_line = "Безлимит" if remaining_after is None else f"Осталось попыток: {remaining_after}"
+
             await send_log(
                 context,
                 f"Готово ({mode_label})\n"
                 f"@{username} (ID: {uid})\n"
                 f"Отдано: {new_name}\n"
-                f"Осталось попыток: {remaining_after}\n"
+                f"{after_line}\n"
                 f"{kyiv_now().strftime('%d.%m.%Y %H:%M:%S')}"
             )
             context.user_data["waiting"] = False
@@ -389,6 +580,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         pass
         return
 
+    # ── mp4 -> gif ────────────────────────────────────────────────────────────
     if input_path.lower().endswith(".mp4"):
         gif_path = os.path.splitext(input_path)[0] + ".gif"
         try:
@@ -403,11 +595,15 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await send_log(context, f"Ошибка ffmpeg у {uid}: {e.stderr.decode()[:100]}")
             return
 
+    # ── Карты ─────────────────────────────────────────────────────────────────
     output_path = f"./tmp/{os.path.splitext(os.path.basename(input_path))[0]}.svn"
 
     if mode == "photo":
         script = SCRIPT_PHOTO
         prefix = "photo"
+    elif mode == "mini":
+        script = SCRIPT_MINI
+        prefix = "mini"
     else:
         script = SCRIPT_VIDEO
         prefix = "map"
@@ -420,16 +616,21 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         new_name = f"{prefix}{random.randint(100000, 999999)}.svn"
         await message.reply_document(document=open(output_path, "rb"), filename=new_name)
 
-        add_usage(uid, USAGE_LOG)
-        _, remaining_after = check_limit(uid, USAGE_LOG, LIMIT_PER_DAY)
+        if not unlimited:
+            add_usage(uid, USAGE_LOG)
+            _, remaining_after = check_limit(uid, USAGE_LOG, LIMIT_PER_DAY)
+        else:
+            remaining_after = None
 
         log_event(f"SUCCESS ({mode_label}): {uid} @{username} -> {new_name}")
+        after_line = "Безлимит" if remaining_after is None else f"Осталось попыток: {remaining_after}"
+
         await send_log(
             context,
             f"Сконвертировано ({mode_label})\n"
             f"@{username} (ID: {uid})\n"
             f"Отдано: {new_name}\n"
-            f"Осталось попыток: {remaining_after}\n"
+            f"{after_line}\n"
             f"{kyiv_now().strftime('%d.%m.%Y %H:%M:%S')}"
         )
         context.user_data["waiting"] = False
@@ -456,6 +657,9 @@ def main():
     application.add_handler(CommandHandler("ban", ban))
     application.add_handler(CommandHandler("unban", unban))
     application.add_handler(CommandHandler("list_banned", list_banned))
+    application.add_handler(CommandHandler("unlimited", unlimited_cmd))
+    application.add_handler(CommandHandler("limited", limited_cmd))
+    application.add_handler(CommandHandler("list_unlimited", list_unlimited))
     application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(MessageHandler(filters.VIDEO | filters.ANIMATION | filters.Document.ALL, handle_media))
     application.run_polling()
