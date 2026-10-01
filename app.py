@@ -2,6 +2,7 @@ import os
 import threading
 import subprocess
 import random
+import secrets
 from datetime import datetime, timedelta
 from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -21,6 +22,10 @@ KYIV_TZ = timedelta(hours=3)
 MOD_URL = "https://github.com/omegalatin744-del/svn-bot-convert/releases/download/1.0/HP0.4NoOpti.apk"
 
 BANNED_IDS = set()
+
+# ── Коды доступа ─────────────────────────────────────────────────────────────
+ACCESS_CODES = {}       # { code: {"used_by": user_id_or_None} }
+GRANTED_USERS = set()   # user_ids, у которых доступ открыт
 
 USAGE_LOG = {}
 LIMIT_PER_DAY = 3
@@ -94,6 +99,16 @@ def grant_unlimited(user_id, kinds, expire_ts):
 
 def revoke_unlimited(user_id):
     UNLIMITED.pop(user_id, None)
+
+
+def generate_code():
+    part1 = "".join(secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(2))
+    part2 = "".join(secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(4))
+    return f"SVN-{part1}{part2}"
+
+
+def has_access(user_id):
+    return user_id in GRANTED_USERS
 
 
 INFO_TEXT = (
@@ -200,6 +215,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send_log(context, f"Забаненный {uid} попытался использовать /start")
         return
 
+    if not has_access(uid):
+        await update.message.reply_text(
+            "Введите код доступа командой:\n"
+            "/code <ваш_код>\n\n"
+            "Код выдаёт администратор."
+        )
+        return
+
     keyboard = [
         [InlineKeyboardButton("Создать видео-карту", callback_data="start_video")],
         [InlineKeyboardButton("Создать фото-карту", callback_data="start_photo")],
@@ -211,6 +234,97 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Выбери действие, затем отправь файл.",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
+
+async def code_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if uid in BANNED_IDS:
+        await update.message.reply_text("Вы заблокированы.")
+        return
+
+    if not context.args:
+        await update.message.reply_text("Использование: /code <код>")
+        return
+
+    if uid in GRANTED_USERS:
+        await update.message.reply_text("У вас уже есть доступ.")
+        return
+
+    entered = context.args[0].strip().upper()
+
+    if entered not in ACCESS_CODES:
+        await update.message.reply_text("Неверный код.")
+        return
+
+    entry = ACCESS_CODES[entered]
+    if entry["used_by"] is not None:
+        await update.message.reply_text("Этот код уже использован.")
+        return
+
+    entry["used_by"] = uid
+    GRANTED_USERS.add(uid)
+
+    await update.message.reply_text(
+        "Код принят! Доступ открыт.\n"
+        "Нажмите /start, чтобы начать."
+    )
+    await send_log(context, f"Активирован код\nID: {uid}\nКод: {entered}")
+
+
+async def gencode(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    code = generate_code()
+    while code in ACCESS_CODES:
+        code = generate_code()
+    ACCESS_CODES[code] = {"used_by": None}
+    await update.message.reply_text(f"Новый код:\n{code}")
+    await send_log(context, f"Создан код\n{code}")
+
+
+async def list_codes(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    free = [c for c, e in ACCESS_CODES.items() if e["used_by"] is None]
+    if not free:
+        await update.message.reply_text("Нет активных (неиспользованных) кодов.")
+        return
+    await update.message.reply_text("Активные коды:\n" + "\n".join(free))
+
+
+async def revoke_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    if not context.args:
+        await update.message.reply_text("Использование: /revoke <код>")
+        return
+    code = context.args[0].strip().upper()
+    if code in ACCESS_CODES:
+        ACCESS_CODES.pop(code)
+        await update.message.reply_text(f"Код {code} удалён.")
+        await send_log(context, f"Код удалён\n{code}")
+    else:
+        await update.message.reply_text("Код не найден.")
+
+
+async def reset_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    if not context.args:
+        await update.message.reply_text("Использование: /reset <user_id>")
+        return
+    try:
+        target = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("user_id должен быть числом.")
+        return
+    GRANTED_USERS.discard(target)
+    # Освобождаем код, привязанный к этому пользователю
+    for code, entry in list(ACCESS_CODES.items()):
+        if entry["used_by"] == target:
+            entry["used_by"] = None
+    await update.message.reply_text(f"Доступ сброшен для {target}.")
+    await send_log(context, f"Сброшен доступ\nID: {target}")
+
 
 async def ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
@@ -320,6 +434,26 @@ async def list_unlimited(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Безлимит:\n" + "\n".join(lines))
 
 
+async def send_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    args = context.args
+    if len(args) < 2:
+        await update.message.reply_text("Использование: /send <user_id> <текст>")
+        return
+    try:
+        target = int(args[0])
+    except ValueError:
+        await update.message.reply_text("user_id должен быть числом.")
+        return
+    text = " ".join(args[1:])
+    try:
+        await context.bot.send_message(chat_id=target, text=text)
+        await update.message.reply_text(f"Отправлено пользователю {target}.")
+    except Exception as e:
+        await update.message.reply_text(f"Не удалось отправить: {e}")
+
+
 # ── Кнопки ───────────────────────────────────────────────────────────────────
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -329,6 +463,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if uid in BANNED_IDS:
         await query.edit_message_text("Вы заблокированы.")
+        return
+
+    if not has_access(uid):
+        await query.edit_message_text(
+            "Введите код доступа командой:\n/code <ваш_код>"
+        )
         return
 
     if query.data == "start_video":
@@ -402,6 +542,10 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if uid in BANNED_IDS:
         await update.message.reply_text("Вы заблокированы и не можете пользоваться ботом.")
         await send_log(context, f"Забаненный {uid} @{username} пытался отправить файл")
+        return
+
+    if not has_access(uid):
+        await update.message.reply_text("Введите код доступа командой: /code <ваш_код>")
         return
 
     if not context.user_data.get("waiting"):
@@ -655,12 +799,18 @@ def main():
 
     application = Application.builder().token(TOKEN).build()
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("code", code_cmd))
+    application.add_handler(CommandHandler("gencode", gencode))
+    application.add_handler(CommandHandler("list_codes", list_codes))
+    application.add_handler(CommandHandler("revoke", revoke_code))
+    application.add_handler(CommandHandler("reset", reset_user))
     application.add_handler(CommandHandler("ban", ban))
     application.add_handler(CommandHandler("unban", unban))
     application.add_handler(CommandHandler("list_banned", list_banned))
     application.add_handler(CommandHandler("unlimited", unlimited_cmd))
     application.add_handler(CommandHandler("limited", limited_cmd))
     application.add_handler(CommandHandler("list_unlimited", list_unlimited))
+    application.add_handler(CommandHandler("send", send_cmd))
     application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(MessageHandler(filters.VIDEO | filters.ANIMATION | filters.Document.ALL, handle_media))
     application.run_polling()
